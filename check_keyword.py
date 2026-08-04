@@ -4,7 +4,9 @@ import re
 import ctypes
 import winsound
 import os
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import tkinter as tk
+from tkinter import messagebox
 
 try:
     from mss import mss
@@ -17,12 +19,24 @@ except ImportError:
     sys.exit(1)
 
 # ================== 配置区 ==================
-# 针对你截图的分辨率（3840x2160），请根据实际微调
-MONITOR_REGION = (100, 140, 1000, 1100)   # 覆盖近卫+天灾全部玩家名
-
-CHECK_INTERVAL = 1.2          # EasyOCR稍慢，建议1.0~1.5秒
-TIMEOUT = 300                 # 300秒超时退出
+# 监测区域：左，上，宽，高
+MONITOR_REGION = {"top": 140, "left": 100, "width": 900, "height": 960}
+CHECK_INTERVAL = 0.5
 # ===========================================
+
+def set_dpi_awareness():
+    """ 设置 DPI 感知，使窗口支持系统缩放 """
+    try:
+        # 模式 2 表示 Per Monitor DPI Aware，能更好地支持系统缩放
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 def get_resource_path(relative_path):
     """ 获取资源的绝对路径，适配打包后的路径 """
@@ -34,89 +48,192 @@ def load_keywords():
     """ 从 paid_player_id.txt 加载关键字列表 """
     file_path = get_resource_path("paid_player_id.txt")
     if not os.path.exists(file_path):
-        # 尝试从当前目录加载，如果打包时没放进去
         file_path = "paid_player_id.txt"
         
     if os.path.exists(file_path):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            return [line.strip() for line in f if line.strip()]
-    else:
-        print(f"警告: 未找到 {file_path}，使用内置默认列表")
-        return ["素质路人88", "川医声在掏"]
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            print(f"读取文件错误: {e}")
+    return ["素质路人88", "川医声在掏"]
+
+def save_keywords(keywords):
+    """ 将关键字列表保存到 paid_player_id.txt """
+    file_path = get_resource_path("paid_player_id.txt")
+    # 如果是在临时目录下（打包后），可能需要检查逻辑，但通常我们希望保存到工作目录
+    if hasattr(sys, '_MEIPASS'):
+        # 打包模式下，_MEIPASS 是只读的，我们需要保存在程序运行目录
+        file_path = os.path.join(os.path.abspath("."), "paid_player_id.txt")
+    
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            for kw in keywords:
+                f.write(f"{kw}\n")
+    except Exception as e:
+        print(f"保存文件错误: {e}")
 
 KEYWORDS = load_keywords()
 
-# 初始化 EasyOCR（支持中英文）
-print("正在加载 EasyOCR 模型（首次运行需要下载）...")
-# 预先指定模型路径，方便打包
+# 初始化 EasyOCR
+print("正在检查 GPU 状态...")
+try:
+    import torch
+    use_gpu = torch.cuda.is_available()
+    if use_gpu:
+        print(f"检测到 GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("未检测到可用 GPU，将使用 CPU 模式 (识别速度较慢)")
+        print("提示: 如果您有 NVIDIA 显卡，请安装 GPU 版 PyTorch: pip install torch --index-url https://download.pytorch.org/whl/cu118")
+except ImportError:
+    use_gpu = False
+    print("无法导入 torch，尝试使用默认配置")
+
+print("正在加载 EasyOCR 模型...")
 model_storage_path = get_resource_path("easyocr_models")
-reader = easyocr.Reader(['ch_sim', 'en'], gpu=True, model_storage_directory=model_storage_path) 
+reader = easyocr.Reader(['ch_sim', 'en'], gpu=use_gpu, model_storage_directory=model_storage_path) 
 print("模型加载完成！\n")
 
-def show_alert(matched_names):
-    """线程安全的 Windows 弹窗"""
-    msg = "检测到目标玩家！\n\n" + "\n".join(matched_names)
-    try:
-        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-    except:
-        print("\a")
+class MonitorApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Warcraft III 玩家监测")
+        
+        # 初始窗口大小
+        base_width = 400
+        base_height = 550
+        
+        self.is_running = False
+        self.monitor_thread = None
+        self.stop_event = threading.Event()
 
-    ctypes.windll.user32.MessageBoxW(0, msg, "玩家检测提醒", 0x30 | 0x1000)
+        # 设置窗口位置到中部偏右侧
+        self.root.update_idletasks() # 确保能获取到准确的屏幕参数
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        
+        # 中部偏右：x 保持靠近右边缘，y 居中
+        x = screen_width - base_width - 10 
+        y = (screen_height - base_height) // 2 
+        
+        self.root.geometry(f"{base_width}x{base_height}+{x}+{y}")
+        self.root.resizable(False, False) 
+        
+        # UI 元素
+        # 使用固定宽度以防止文本变化时布局抖动
+        self.label_status = tk.Label(root, text="状态: 未运行", fg="red", font=("Arial", 12), width=20)
+        self.label_status.pack(pady=10)
 
-def capture_and_ocr():
-    with mss() as sct:
-        last_matched = set()
-        start_time = time.time()
+        self.btn_start = tk.Button(root, text="开始识别", command=self.start_monitoring, width=15, height=2)
+        self.btn_start.pack(pady=5)
 
-        while True:
-            # 检查超时
-            elapsed_time = time.time() - start_time
-            if elapsed_time > TIMEOUT:
-                print(f"[{time.strftime('%H:%M:%S')}] 已监控超过 {TIMEOUT} 秒，程序退出。")
-                break
+        self.btn_stop = tk.Button(root, text="停止识别", command=self.stop_monitoring, width=15, height=2, state=tk.DISABLED)
+        self.btn_stop.pack(pady=5)
 
-            screenshot = sct.grab(MONITOR_REGION)
-            img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+        # 新增 ID 区域 (移动到按钮下方)
+        frame_add = tk.Frame(root)
+        frame_add.pack(pady=10)
+        
+        tk.Label(frame_add, text="新增玩家ID:").pack(side=tk.LEFT)
+        self.entry_new_id = tk.Entry(frame_add, width=15)
+        self.entry_new_id.pack(side=tk.LEFT, padx=5)
+        self.btn_add = tk.Button(frame_add, text="添加", command=self.add_keyword)
+        self.btn_add.pack(side=tk.LEFT)
 
-            # 转成 numpy 给 EasyOCR
-            img_np = np.array(img)
+        # 展示列表区域
+        tk.Label(root, text="当前目标名单:").pack(pady=(10, 0))
+        self.text_keywords = tk.Text(root, width=40, height=10)
+        self.text_keywords.pack(pady=5, padx=10)
+        self.update_keyword_display()
 
-            # EasyOCR 识别（detail=0 只返回文字）
-            results = reader.readtext(img_np, detail=0, paragraph=False)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
-            text = " ".join(results)
-            text = re.sub(r'\s+', ' ', text).strip()
+    def update_keyword_display(self):
+        """ 更新多行文本框显示的内容 """
+        self.text_keywords.config(state=tk.NORMAL)
+        self.text_keywords.delete(1.0, tk.END)
+        self.text_keywords.insert(tk.END, "\n".join(KEYWORDS))
+        self.text_keywords.config(state=tk.DISABLED)
 
-            if text:
-                print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text}")
+    def add_keyword(self):
+        new_id = self.entry_new_id.get().strip()
+        if not new_id:
+            messagebox.showwarning("警告", "请输入有效的玩家ID")
+            return
+        
+        if new_id in KEYWORDS:
+            messagebox.showinfo("提示", f"ID '{new_id}' 已在名单中")
+        else:
+            KEYWORDS.append(new_id)
+            save_keywords(KEYWORDS)
+            self.update_keyword_display()
+            messagebox.showinfo("成功", f"已添加并保存: {new_id}")
+            self.entry_new_id.delete(0, tk.END)
 
-                matched = [kw for kw in KEYWORDS if kw.lower() in text.lower()]
+    def start_monitoring(self):
+        if not self.is_running:
+            self.is_running = True
+            self.stop_event.clear()
+            self.btn_start.config(state=tk.DISABLED)
+            self.btn_stop.config(state=tk.NORMAL)
+            self.label_status.config(text="状态: 正在监控...", fg="green")
+            
+            self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
+            self.monitor_thread.start()
 
-                # 只在新匹配到时弹窗
-                current = set(matched)
-                if current:
-                    print(f"【触发提醒】匹配到：{matched}")
-                    show_alert(matched)
-                    print("检测到关键字，程序即将退出。")
-                    break # 检测到关键字后退出
-                else:
-                    last_matched = set()
+    def stop_monitoring(self):
+        if self.is_running:
+            self.is_running = False
+            self.stop_event.set()
+            self.btn_start.config(state=tk.NORMAL)
+            self.btn_stop.config(state=tk.DISABLED)
+            self.label_status.config(text="状态: 已停止", fg="red")
 
-            time.sleep(CHECK_INTERVAL)
+    def show_alert(self, matched_names):
+        msg = "检测到目标玩家！\n\n" + "\n".join(matched_names)
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except:
+            pass
+        # 在主线程中弹出对话框
+        messagebox.showinfo("玩家检测提醒", msg)
+
+    def monitor_loop(self):
+        with mss() as sct:
+            while not self.stop_event.is_set():
+                try:
+                    screenshot = sct.grab(MONITOR_REGION)
+                    img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
+                    img_np = np.array(img)
+                    
+                    results = reader.readtext(img_np, detail=0, paragraph=False)
+                    text = " ".join(results)
+                    text = re.sub(r'\s+', ' ', text).strip()
+
+                    if text:
+                        print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text}")
+                        matched = [kw for kw in KEYWORDS if kw.lower() in text.lower()]
+                        
+                        if matched:
+                            print(f"【触发提醒】匹配到：{matched}")
+                            # 切换回主线程停止并弹窗
+                            self.root.after(0, self.handle_match, matched)
+                            break
+                except Exception as e:
+                    print(f"识别出错: {e}")
+                
+                time.sleep(CHECK_INTERVAL)
+
+    def handle_match(self, matched):
+        self.stop_monitoring()
+        self.show_alert(matched)
+
+    def on_closing(self):
+        self.stop_event.set()
+        self.root.destroy()
 
 if __name__ == "__main__":
-    print("Warcraft III 玩家监测程序（EasyOCR 版）")
-    print(f"监测区域: {MONITOR_REGION}")
-    print(f"监控玩家: {len(KEYWORDS)} 个")
-    print(f"监控超时: {TIMEOUT} 秒")
-    print("按 Ctrl+C 停止\n")
-
-    try:
-        capture_and_ocr()
-    except KeyboardInterrupt:
-        print("\n程序已停止")
-    except Exception as e:
-        print(f"错误: {e}")
-    
-    # 保持窗口一下，方便看结果
-    time.sleep(2)
+    set_dpi_awareness()
+    root = tk.Tk()
+    app = MonitorApp(root)
+    root.mainloop()

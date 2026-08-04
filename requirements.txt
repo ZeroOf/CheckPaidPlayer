@@ -1,4 +1,6 @@
 mss
 Pillow
-pytesseract
+easyocr
+torch
+numpy
 pyinstaller
