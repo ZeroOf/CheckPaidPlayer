@@ -2,14 +2,14 @@
 
 
 a = Analysis(
-    ['check_keyword.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[
         ('paid_player_id.txt', '.'),
         ('easyocr_models/*', 'easyocr_models'),
     ],
-    hiddenimports=['easyocr', 'PIL', 'mss', 'numpy', 'torch'],
+    hiddenimports=['easyocr', 'PIL', 'mss', 'numpy', 'torch', 'config', 'utils', 'ocr_engine', 'gui'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
