@@ -23,6 +23,58 @@ except ImportError:
 MONITOR_REGION = {"top": 140, "left": 100, "width": 900, "height": 960}
 CHECK_INTERVAL = 0.5
 TIMEOUT_SECONDS = 300  # 启动后 300s 未检测到目标则停止
+
+# 混淆字符映射表
+CONFUSABLE_MAP = {
+    'l': ['1', 'I', 'i'],
+    '1': ['l', 'I'],
+    'I': ['l', '1', 'i'],
+    '0': ['o', 'O'],
+    'o': ['0', 'O'],
+    'O': ['0', 'o'],
+    'u': ['v', 'n'],
+    'v': ['u', 'n'],
+    'n': ['u', 'v'],
+    'w': ['vv', 'v v'],
+    '涛': ['寿'],
+    '寿': ['涛'],
+    '昊': ['吴'],
+    '吴': ['昊'],
+    '灬': [''],
+    '丶': [''],
+}
+
+def get_variants(text):
+    """ 生成可能的识别错误变体 """
+    variants = {text}
+    
+    # 1. 常见的大小写变体
+    variants.add(text.lower())
+    variants.add(text.upper())
+
+    # 2. 基于映射的替换 (处理英文和数字)
+    chars = list(text)
+    for i, char in enumerate(chars):
+        if char in CONFUSABLE_MAP:
+            for replacement in CONFUSABLE_MAP[char]:
+                new_variant = chars[:]
+                new_variant[i] = replacement
+                variants.add("".join(new_variant))
+        
+        # 处理对应的大/小写映射
+        elif char.lower() in CONFUSABLE_MAP:
+            for replacement in CONFUSABLE_MAP[char.lower()]:
+                new_variant = chars[:]
+                new_variant[i] = replacement
+                variants.add("".join(new_variant))
+
+    # 3. 针对特定词汇的整体替换 (如去除符号)
+    stripped = text.replace('丶', '').replace('灬', '').strip()
+    if stripped:
+        variants.add(stripped)
+
+    return list(variants)
+
 # ===========================================
 
 def set_dpi_awareness():
@@ -46,34 +98,44 @@ def get_resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 def load_keywords():
-    """ 从 paid_player_id.txt 加载关键字列表 """
+    """ 从 paid_player_id.txt 加载原始关键字列表 """
+    ids = []
     # 优先尝试从程序运行目录读取（用户修改后的名单）
     local_path = os.path.join(os.path.abspath("."), "paid_player_id.txt")
     if os.path.exists(local_path):
         try:
             with open(local_path, 'r', encoding='utf-8') as f:
-                return [line.strip() for line in f if line.strip()]
+                ids = [line.strip() for line in f if line.strip()]
         except Exception as e:
             print(f"读取本地文件错误: {e}")
 
     # 如果运行目录没有，尝试从资源目录读取（安装包带的默认名单）
-    resource_path = get_resource_path("paid_player_id.txt")
-    if os.path.exists(resource_path):
-        try:
-            with open(resource_path, 'r', encoding='utf-8') as f:
-                return [line.strip() for line in f if line.strip()]
-        except Exception as e:
-            print(f"读取资源文件错误: {e}")
+    if not ids:
+        resource_path = get_resource_path("paid_player_id.txt")
+        if os.path.exists(resource_path):
+            try:
+                with open(resource_path, 'r', encoding='utf-8') as f:
+                    ids = [line.strip() for line in f if line.strip()]
+            except Exception as e:
+                print(f"读取资源文件错误: {e}")
             
-    return ["素质路人88", "川医声在掏"]
+    if not ids:
+        ids = ["素质路人88", "川医声在掏"]
+    
+    # 去重保留原始顺序
+    seen = set()
+    unique_ids = []
+    for x in ids:
+        if x not in seen:
+            unique_ids.append(x)
+            seen.add(x)
+    return unique_ids
 
 def save_keywords(keywords):
     """ 将关键字列表保存到 paid_player_id.txt """
-    file_path = get_resource_path("paid_player_id.txt")
-    # 如果是在临时目录下（打包后），可能需要检查逻辑，但通常我们希望保存到工作目录
-    if hasattr(sys, '_MEIPASS'):
-        # 打包模式下，_MEIPASS 是只读的，我们需要保存在程序运行目录
-        file_path = os.path.join(os.path.abspath("."), "paid_player_id.txt")
+    file_path = os.path.join(os.path.abspath("."), "paid_player_id.txt")
+    # 如果是在临时目录下（打包后），get_resource_path 会指向 _MEIPASS，那是只读的
+    # 我们始终尝试保存在程序运行目录，这样用户修改才能持久化
     
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -82,7 +144,15 @@ def save_keywords(keywords):
     except Exception as e:
         print(f"保存文件错误: {e}")
 
+def get_all_match_keywords(original_keywords):
+    """ 根据原始名单生成所有可能的匹配项（包括变体） """
+    all_matches = set()
+    for kw in original_keywords:
+        all_matches.update(get_variants(kw))
+    return list(all_matches)
+
 KEYWORDS = load_keywords()
+MATCH_KEYWORDS = get_all_match_keywords(KEYWORDS)
 
 # 初始化 EasyOCR
 print("正在检查 GPU 状态...")
@@ -170,78 +240,31 @@ class MonitorApp:
             messagebox.showwarning("警告", "请输入有效的玩家ID", parent=self.root)
             return
         
-        # 定义混淆字符映射
-        confusable_map = {
-            'l': ['1', 'I', 'i'],
-            '1': ['l', 'I'],
-            'I': ['l', '1', 'i'],
-            '0': ['o', 'O'],
-            'o': ['0', 'O'],
-            'O': ['0', 'o'],
-            'u': ['v', 'n'],
-            'v': ['u', 'n'],
-            'n': ['u', 'v'],
-            'w': ['vv', 'v v'],
-            '涛': ['寿'],
-            '寿': ['涛'],
-            '昊': ['吴'],
-            '吴': ['昊'],
-            '灬': [''],
-            '丶': [''],
-        }
+        if new_id in KEYWORDS:
+            messagebox.showinfo("提示", f"ID '{new_id}' 已在名单中", parent=self.root)
+            return
 
-        def get_variants(text):
-            variants = {text}
-            # 基础替换逻辑：遍历字符串中的每个字符，如果该字符有混淆项，则生成替换后的变体
-            # 为了简单起见，这里采用单次替换和常见全替换组合
-            
-            # 1. 常见的大小写变体
-            variants.add(text.lower())
-            variants.add(text.upper())
-
-            # 2. 基于映射的替换 (处理英文和数字)
-            chars = list(text)
-            for i, char in enumerate(chars):
-                if char in confusable_map:
-                    for replacement in confusable_map[char]:
-                        new_variant = chars[:]
-                        new_variant[i] = replacement
-                        variants.add("".join(new_variant))
-                
-                # 处理对应的大/小写映射
-                elif char.lower() in confusable_map:
-                    for replacement in confusable_map[char.lower()]:
-                        new_variant = chars[:]
-                        new_variant[i] = replacement
-                        variants.add("".join(new_variant))
-
-            # 3. 针对特定词汇的整体替换 (如去除符号)
-            stripped = text.replace('丶', '').replace('灬', '').strip()
-            if stripped:
-                variants.add(stripped)
-
-            return variants
-
-        new_variants = get_variants(new_id)
-        added_any = False
-        newly_added = []
-
-        for vid in new_variants:
-            if vid and vid not in KEYWORDS:
-                KEYWORDS.append(vid)
-                newly_added.append(vid)
-                added_any = True
+        # 1. 更新原始名单并保存
+        KEYWORDS.append(new_id)
+        save_keywords(KEYWORDS)
         
-        if added_any:
-            save_keywords(KEYWORDS)
-            self.update_keyword_display()
-            msg = f"已添加: {new_id}"
-            if len(newly_added) > 1:
-                msg += f"\n已自动补全 {len(newly_added)-1} 个易混淆变体"
-            messagebox.showinfo("成功", msg, parent=self.root)
-            self.entry_new_id.delete(0, tk.END)
-        else:
-            messagebox.showinfo("提示", f"ID '{new_id}' 及其变体已在名单中", parent=self.root)
+        # 2. 更新内存中的匹配变体名单
+        global MATCH_KEYWORDS
+        new_variants = get_variants(new_id)
+        added_count = 0
+        for vid in new_variants:
+            if vid not in MATCH_KEYWORDS:
+                MATCH_KEYWORDS.append(vid)
+                added_count += 1
+        
+        # 3. 更新界面
+        self.update_keyword_display()
+        msg = f"已成功添加目标: {new_id}"
+        if added_count > 1:
+            msg += f"\n已在后台自动加载 {added_count-1} 个识别变体"
+            
+        messagebox.showinfo("成功", msg, parent=self.root)
+        self.entry_new_id.delete(0, tk.END)
 
     def start_monitoring(self):
         if not self.is_running:
@@ -302,7 +325,7 @@ class MonitorApp:
 
                     if text:
                         print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text}")
-                        matched = [kw for kw in KEYWORDS if kw.lower() in text.lower()]
+                        matched = [kw for kw in MATCH_KEYWORDS if kw.lower() in text.lower()]
                         
                         if matched:
                             print(f"【触发提醒】匹配到：{matched}")
