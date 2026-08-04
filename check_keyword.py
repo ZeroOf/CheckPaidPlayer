@@ -1,196 +1,114 @@
-import ctypes
 import time
-import tkinter as tk
-from tkinter import messagebox
-import threading
 import sys
 import re
-import os
-
+import ctypes
 import winsound
-from pathlib import Path
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 try:
-    from mss import MSS
-    from PIL import Image, ImageEnhance, ImageOps, ImageFilter
-    import pytesseract
+    from mss import mss
+    from PIL import Image
+    import easyocr
+    import numpy as np
 except ImportError:
-    print("缺少依赖库，请先安装：")
-    print("pip install mss pillow pytesseract")
+    print("请先安装依赖：")
+    print("pip install mss pillow easyocr")
     sys.exit(1)
 
-# ================== 配置区（已根据图片适配） ==================
-# Tesseract OCR 引擎路径（如果未加入系统PATH，请在此指定）
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# ================== 配置区 ==================
+# 针对你截图的分辨率（3840x2160），请根据实际微调
+MONITOR_REGION = (100, 140, 1000, 1100)   # 覆盖近卫+天灾全部玩家名
 
-# 监测区域（针对 3840x2160 分辨率的左边玩家列表，按实际分辨率自行微调）
-# 格式：{"top": y1, "left": x1, "width": w, "height": h}
-MONITOR_REGION = {"top": 180, "left": 240, "width": 1040 - 240, "height": 1100 - 180}   # 覆盖近卫+天灾玩家名字区域
+CHECK_INTERVAL = 1.2          # EasyOCR稍慢，建议1.0~1.5秒
+TIMEOUT = 300                 # 300秒超时退出
+# ===========================================
 
-if getattr(sys, 'frozen', False):
-    # 打包后的路径
-    BASE_PATH = Path(sys._MEIPASS)
-    # 对于经常需要修改的配置文件，建议放在 exe 同级目录
-    KEYWORDS_FILE = Path(sys.executable).parent / "paid_player_id.txt"
-    
-    # 配置 Tesseract 路径（打包后在 _MEIPASS/tesseract 目录下）
-    tesseract_dir = BASE_PATH / "tesseract"
-    pytesseract.pytesseract.tesseract_cmd = str(tesseract_dir / "tesseract.exe")
-    os.environ["TESSDATA_PREFIX"] = str(tesseract_dir / "tessdata")
-else:
-    # 开发环境路径
-    BASE_PATH = Path(__file__).parent
-    KEYWORDS_FILE = BASE_PATH / "paid_player_id.txt"
-    # 如果开发环境也需要指定路径，取消下面注释
-    # pytesseract.pytesseract.tesseract_cmd = r'H:\Program Files\Tesseract-OCR\tesseract.exe'
+def get_resource_path(relative_path):
+    """ 获取资源的绝对路径，适配打包后的路径 """
+    if hasattr(sys, '_MEIPASS'):
+        return os.path.join(sys._MEIPASS, relative_path)
+    return os.path.join(os.path.abspath("."), relative_path)
 
-def load_keywords(file_path):
-    """从文件加载要监控的玩家名，一行一个，自动去重并忽略空行"""
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            keywords = []
-            seen = set()
+def load_keywords():
+    """ 从 paid_player_id.txt 加载关键字列表 """
+    file_path = get_resource_path("paid_player_id.txt")
+    if not os.path.exists(file_path):
+        # 尝试从当前目录加载，如果打包时没放进去
+        file_path = "paid_player_id.txt"
+        
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return [line.strip() for line in f if line.strip()]
+    else:
+        print(f"警告: 未找到 {file_path}，使用内置默认列表")
+        return ["素质路人88", "川医声在掏"]
 
-            for line in f:
-                name = line.strip()
-                if not name:
-                    continue
+KEYWORDS = load_keywords()
 
-                key = name.lower()
-                if key not in seen:
-                    keywords.append(name)
-                    seen.add(key)
-
-            return keywords
-    except FileNotFoundError:
-        print(f"未找到玩家名单文件: {file_path}")
-        return []
-
-# 要监控的玩家名
-KEYWORDS = load_keywords(KEYWORDS_FILE)
-
-CHECK_INTERVAL = 1.0
-MAX_RUNTIME_SECONDS = 300
-# =============================================================
-
-def preprocess_image(img):
-    """针对白色文字的OCR预处理：提取白字、压暗背景、增强对比度"""
-    # 转 RGB，方便按颜色特征提取白色文字
-    img = img.convert("RGB")
-
-    # 提取接近白色/浅灰色的像素：
-    # Warcraft III UI 中白字通常 RGB 三通道都较高，且通道差异较小
-    pixels = img.load()
-    new_img = Image.new("RGB", img.size)
-    new_pixels = new_img.load()
-
-    for y in range(img.height):
-        for x in range(img.width):
-            r, g, b = pixels[x, y]
-            # 亮度足够高
-            bright = r > 155 and g > 155 and b > 155
-            # 接近灰白色，避免把彩色图标/边框也保留下来
-            near_white = max(r, g, b) - min(r, g, b) < 45
-            if bright and near_white:
-                new_pixels[x, y] = (255, 255, 255)
-            else:
-                new_pixels[x, y] = (0, 0, 0)
-    
-    img = new_img
-
-    # 转灰度
-    img = img.convert("L")
-
-    # 白字黑底 → 黑字白底，Tesseract 更容易识别
-    img = ImageOps.invert(img)
-
-    # 放大图像，提高小字号识别率
-    scale = 2
-    img = img.resize((img.width * scale, img.height * scale), Image.Resampling.LANCZOS)
-
-    # 增强对比度
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(2.5)
-
-    # 自动拉伸对比度
-    img = ImageOps.autocontrast(img)
-
-    # 轻微锐化
-    img = img.filter(ImageFilter.SHARPEN)
-
-    # 二值化：黑字白底
-    img = img.point(lambda p: 0 if p < 170 else 255)
-
-    return img
+# 初始化 EasyOCR（支持中英文）
+print("正在加载 EasyOCR 模型（首次运行需要下载）...")
+# 预先指定模型路径，方便打包
+model_storage_path = get_resource_path("easyocr_models")
+reader = easyocr.Reader(['ch_sim', 'en'], gpu=True, model_storage_directory=model_storage_path) 
+print("模型加载完成！\n")
 
 def show_alert(matched_names):
-    """线程安全的弹窗（使用Windows原生MessageBox）"""
+    """线程安全的 Windows 弹窗"""
     msg = "检测到目标玩家！\n\n" + "\n".join(matched_names)
-
-    # 播放提示音
     try:
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
     except:
         print("\a")
 
-    # Windows原生弹窗（可在任意线程调用）
-    ctypes.windll.user32.MessageBoxW(
-        0,                          # 父窗口
-        msg,                        # 内容
-        "玩家检测提醒",              # 标题
-        0x30 | 0x1000               # 警告图标 + 置顶
-    )
-
-
-def clean_text(text):
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
+    ctypes.windll.user32.MessageBoxW(0, msg, "玩家检测提醒", 0x30 | 0x1000)
 
 def capture_and_ocr():
-    start_time = time.time()
+    with mss() as sct:
+        last_matched = set()
+        start_time = time.time()
 
-    with MSS() as sct:
         while True:
-            if time.time() - start_time >= MAX_RUNTIME_SECONDS:
-                print(f"已运行 {MAX_RUNTIME_SECONDS} 秒，未检测到目标玩家，程序退出")
-                return
+            # 检查超时
+            elapsed_time = time.time() - start_time
+            if elapsed_time > TIMEOUT:
+                print(f"[{time.strftime('%H:%M:%S')}] 已监控超过 {TIMEOUT} 秒，程序退出。")
+                break
 
             screenshot = sct.grab(MONITOR_REGION)
             img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
 
-            img = preprocess_image(img)
+            # 转成 numpy 给 EasyOCR
+            img_np = np.array(img)
 
-            text = pytesseract.image_to_string(
-                img,
-                lang='chi_sim+eng',
-                config=r'--oem 3 --psm 6 -c preserve_interword_spaces=1'
-            )
-            text = clean_text(text)
+            # EasyOCR 识别（detail=0 只返回文字）
+            results = reader.readtext(img_np, detail=0, paragraph=False)
+
+            text = " ".join(results)
+            text = re.sub(r'\s+', ' ', text).strip()
 
             if text:
-                print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text[:150]}...")
+                print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text}")
 
                 matched = [kw for kw in KEYWORDS if kw.lower() in text.lower()]
-                if matched:
-                    print(f"【触发提醒】匹配到玩家：{matched}")
-                    # 直接调用，不需要再开线程
+
+                # 只在新匹配到时弹窗
+                current = set(matched)
+                if current:
+                    print(f"【触发提醒】匹配到：{matched}")
                     show_alert(matched)
-                    print("已检测到目标玩家，程序退出")
-                    return
+                    print("检测到关键字，程序即将退出。")
+                    break # 检测到关键字后退出
+                else:
+                    last_matched = set()
 
             time.sleep(CHECK_INTERVAL)
 
-
 if __name__ == "__main__":
-    print("Warcraft III 玩家监测程序已启动（适配近卫/天灾军团）")
+    print("Warcraft III 玩家监测程序（EasyOCR 版）")
     print(f"监测区域: {MONITOR_REGION}")
-    print(f"监控玩家数: {len(KEYWORDS)}")
-    print(f"最长运行时间: {MAX_RUNTIME_SECONDS} 秒")
-    print("按 Ctrl+C 停止\n")
-
-    if not KEYWORDS:
-        print("玩家名单为空，程序退出")
-        sys.exit(1)
+    print(f"监控玩家: {len(KEYWORDS)} 个")
+    print(f"监控超时: {TIMEOUT} 秒")
     print("按 Ctrl+C 停止\n")
 
     try:
@@ -199,3 +117,6 @@ if __name__ == "__main__":
         print("\n程序已停止")
     except Exception as e:
         print(f"错误: {e}")
+    
+    # 保持窗口一下，方便看结果
+    time.sleep(2)
