@@ -22,6 +22,7 @@ except ImportError:
 # 监测区域：左，上，宽，高
 MONITOR_REGION = {"top": 140, "left": 100, "width": 900, "height": 960}
 CHECK_INTERVAL = 0.5
+TIMEOUT_SECONDS = 300  # 启动后 300s 未检测到目标则停止
 # ===========================================
 
 def set_dpi_awareness():
@@ -46,16 +47,24 @@ def get_resource_path(relative_path):
 
 def load_keywords():
     """ 从 paid_player_id.txt 加载关键字列表 """
-    file_path = get_resource_path("paid_player_id.txt")
-    if not os.path.exists(file_path):
-        file_path = "paid_player_id.txt"
-        
-    if os.path.exists(file_path):
+    # 优先尝试从程序运行目录读取（用户修改后的名单）
+    local_path = os.path.join(os.path.abspath("."), "paid_player_id.txt")
+    if os.path.exists(local_path):
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(local_path, 'r', encoding='utf-8') as f:
                 return [line.strip() for line in f if line.strip()]
         except Exception as e:
-            print(f"读取文件错误: {e}")
+            print(f"读取本地文件错误: {e}")
+
+    # 如果运行目录没有，尝试从资源目录读取（安装包带的默认名单）
+    resource_path = get_resource_path("paid_player_id.txt")
+    if os.path.exists(resource_path):
+        try:
+            with open(resource_path, 'r', encoding='utf-8') as f:
+                return [line.strip() for line in f if line.strip()]
+        except Exception as e:
+            print(f"读取资源文件错误: {e}")
+            
     return ["素质路人88", "川医声在掏"]
 
 def save_keywords(keywords):
@@ -158,21 +167,86 @@ class MonitorApp:
     def add_keyword(self):
         new_id = self.entry_new_id.get().strip()
         if not new_id:
-            messagebox.showwarning("警告", "请输入有效的玩家ID")
+            messagebox.showwarning("警告", "请输入有效的玩家ID", parent=self.root)
             return
         
-        if new_id in KEYWORDS:
-            messagebox.showinfo("提示", f"ID '{new_id}' 已在名单中")
-        else:
-            KEYWORDS.append(new_id)
+        # 定义混淆字符映射
+        confusable_map = {
+            'l': ['1', 'I', 'i'],
+            '1': ['l', 'I'],
+            'I': ['l', '1', 'i'],
+            '0': ['o', 'O'],
+            'o': ['0', 'O'],
+            'O': ['0', 'o'],
+            'u': ['v', 'n'],
+            'v': ['u', 'n'],
+            'n': ['u', 'v'],
+            'w': ['vv', 'v v'],
+            '涛': ['寿'],
+            '寿': ['涛'],
+            '昊': ['吴'],
+            '吴': ['昊'],
+            '灬': [''],
+            '丶': [''],
+        }
+
+        def get_variants(text):
+            variants = {text}
+            # 基础替换逻辑：遍历字符串中的每个字符，如果该字符有混淆项，则生成替换后的变体
+            # 为了简单起见，这里采用单次替换和常见全替换组合
+            
+            # 1. 常见的大小写变体
+            variants.add(text.lower())
+            variants.add(text.upper())
+
+            # 2. 基于映射的替换 (处理英文和数字)
+            chars = list(text)
+            for i, char in enumerate(chars):
+                if char in confusable_map:
+                    for replacement in confusable_map[char]:
+                        new_variant = chars[:]
+                        new_variant[i] = replacement
+                        variants.add("".join(new_variant))
+                
+                # 处理对应的大/小写映射
+                elif char.lower() in confusable_map:
+                    for replacement in confusable_map[char.lower()]:
+                        new_variant = chars[:]
+                        new_variant[i] = replacement
+                        variants.add("".join(new_variant))
+
+            # 3. 针对特定词汇的整体替换 (如去除符号)
+            stripped = text.replace('丶', '').replace('灬', '').strip()
+            if stripped:
+                variants.add(stripped)
+
+            return variants
+
+        new_variants = get_variants(new_id)
+        added_any = False
+        newly_added = []
+
+        for vid in new_variants:
+            if vid and vid not in KEYWORDS:
+                KEYWORDS.append(vid)
+                newly_added.append(vid)
+                added_any = True
+        
+        if added_any:
             save_keywords(KEYWORDS)
             self.update_keyword_display()
-            messagebox.showinfo("成功", f"已添加并保存: {new_id}")
+            msg = f"已添加: {new_id}"
+            if len(newly_added) > 1:
+                msg += f"\n已自动补全 {len(newly_added)-1} 个易混淆变体"
+            messagebox.showinfo("成功", msg, parent=self.root)
             self.entry_new_id.delete(0, tk.END)
+        else:
+            messagebox.showinfo("提示", f"ID '{new_id}' 及其变体已在名单中", parent=self.root)
 
     def start_monitoring(self):
         if not self.is_running:
             self.is_running = True
+            self.start_time = time.time()  # 记录开始时间
             self.stop_event.clear()
             self.btn_start.config(state=tk.DISABLED)
             self.btn_stop.config(state=tk.NORMAL)
@@ -195,12 +269,28 @@ class MonitorApp:
             winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
         except:
             pass
+        
+        # 确保窗口并弹出到最前面
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        self.root.focus_force()
+        
         # 在主线程中弹出对话框
-        messagebox.showinfo("玩家检测提醒", msg)
+        messagebox.showinfo("玩家检测提醒", msg, parent=self.root)
+        
+        # 弹窗关闭后取消最前端显示，以免影响其他操作
+        self.root.attributes("-topmost", False)
 
     def monitor_loop(self):
         with mss() as sct:
             while not self.stop_event.is_set():
+                # 检查是否超时
+                elapsed = time.time() - self.start_time
+                if elapsed > TIMEOUT_SECONDS:
+                    print(f"[{time.strftime('%H:%M:%S')}] 监控超时 ({TIMEOUT_SECONDS}s)，自动停止。")
+                    self.root.after(0, self.handle_timeout)
+                    break
+
                 try:
                     screenshot = sct.grab(MONITOR_REGION)
                     img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
@@ -227,6 +317,11 @@ class MonitorApp:
     def handle_match(self, matched):
         self.stop_monitoring()
         self.show_alert(matched)
+
+    def handle_timeout(self):
+        """ 处理检测超时 """
+        self.stop_monitoring()
+        self.label_status.config(text="状态: 监控超时停止", fg="orange")
 
     def on_closing(self):
         self.stop_event.set()
