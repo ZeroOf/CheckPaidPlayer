@@ -19,7 +19,8 @@ class MonitorApp:
         
         # 初始数据加载
         self.keywords = load_keywords()
-        self.match_keywords = get_all_match_keywords(self.keywords)
+        self.variant_to_original = {}
+        self.match_keywords = self._prepare_match_keywords()
         
         # 初始窗口大小
         base_width = 400
@@ -69,6 +70,17 @@ class MonitorApp:
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    def _prepare_match_keywords(self):
+        """ 准备匹配用的变体名单，并建立变体到原始ID的映射 """
+        all_matches = []
+        for kw in self.keywords:
+            variants = get_variants(kw)
+            for v in variants:
+                if v not in self.variant_to_original:
+                    self.variant_to_original[v] = kw
+                    all_matches.append(v)
+        return all_matches
+
     def update_keyword_display(self):
         """ 更新多行文本框显示的内容 """
         self.text_keywords.config(state=tk.NORMAL)
@@ -98,6 +110,8 @@ class MonitorApp:
         added_count = 0
         for vid in new_variants:
             if vid not in self.match_keywords:
+                # 记录变体到原始 ID 的映射
+                self.variant_to_original[vid] = new_id
                 self.match_keywords.append(vid)
                 added_count += 1
         
@@ -165,11 +179,21 @@ class MonitorApp:
 
                     if text:
                         print(f"[{time.strftime('%H:%M:%S')}] 识别结果：{text}")
-                        matched = [kw for kw in self.match_keywords if kw.lower() in text.lower()]
+                        # 查找匹配的变体
+                        matched_variants = [kw for kw in self.match_keywords if kw.lower() in text.lower()]
                         
-                        if matched:
-                            print(f"【触发提醒】匹配到：{matched}")
-                            self.root.after(0, self.handle_match, matched)
+                        if matched_variants:
+                            # 将变体映射回原始 ID 并去重
+                            original_matched = []
+                            seen_original = set()
+                            for v in matched_variants:
+                                orig = self.variant_to_original.get(v, v)
+                                if orig not in seen_original:
+                                    original_matched.append(orig)
+                                    seen_original.add(orig)
+                            
+                            print(f"【触发提醒】匹配变体：{matched_variants} -> 原始ID：{original_matched}")
+                            self.root.after(0, self.handle_match, original_matched)
                             break
                 except Exception as e:
                     print(f"识别出错: {e}")
