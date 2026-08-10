@@ -6,10 +6,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('paid_player_id.txt', '.'),
+        ('player_list.json', '.'),
+        ('confusable_map.json', '.'),
         ('easyocr_models/*', 'easyocr_models'),
     ],
-    hiddenimports=['easyocr', 'PIL', 'mss', 'numpy', 'torch', 'config', 'utils', 'ocr_engine', 'gui'],
+    hiddenimports=['easyocr', 'PIL', 'mss', 'numpy', 'torch', 'config', 'utils', 'ocr_engine', 'gui', 'list_manager'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

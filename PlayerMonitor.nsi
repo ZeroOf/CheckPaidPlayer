@@ -40,7 +40,8 @@ Section "Install"
     File "dist\${EXE_NAME}"
     
     ; 复制其他资源文件 (如果有)
-    File "dist\paid_player_id.txt"
+    File "dist\player_list.json"
+    File "dist\confusable_map.json"
     File "dist\README.md"
     
     ; 写入卸载程序
@@ -64,7 +65,8 @@ SectionEnd
 
 Section "Uninstall"
     Delete "$INSTDIR\${EXE_NAME}"
-    Delete "$INSTDIR\paid_player_id.txt"
+    Delete "$INSTDIR\player_list.json"
+    Delete "$INSTDIR\confusable_map.json"
     Delete "$INSTDIR\README.md"
     Delete "$INSTDIR\Uninstall.exe"
     
