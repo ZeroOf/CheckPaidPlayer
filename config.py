@@ -63,5 +63,6 @@ def load_confusable_map():
 CONFUSABLE_MAP = load_confusable_map()
 
 # 历史记录配置
-HISTORY_FILE = "history_id.txt"
+# 使用 JSON 格式存储历史记录以便更可靠、可扩展
+HISTORY_FILE = "history_id.json"
 HISTORY_COUNT_TRIGGER = 11

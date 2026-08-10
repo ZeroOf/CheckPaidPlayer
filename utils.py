@@ -155,45 +155,81 @@ def save_keywords(grouped_keywords):
     save_player_data(data)
 
 def record_history_ids(id_list, history_file):
-    """ 
-    将 ID 列表记录到历史文件，记录格式为 ID|timestamp。
-    如果 ID 已存在，则更新其时间戳。
+    """
+    将 ID 列表记录到历史文件，使用 JSON 格式保存为列表对象：
+    [ {"id": "xxx", "ts": 1234567890}, ... ]
+    如果 ID 已存在，则刷新其时间戳；最终按时间戳降序保存（最新在前）。
+    向后兼容旧的文本格式（id|ts 或单独 id）。
     """
     if not id_list:
         return
 
     file_path = os.path.join(os.path.abspath("."), history_file)
     import time
+    import json
     current_ts = int(time.time())
-    
-    # 读取所有记录: {id: timestamp}
-    history_data = {}
+
+    # 读取现有历史（支持 JSON 或旧文本格式）
+    history = []  # list of {"id":..., "ts":...}
     if os.path.exists(file_path):
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if "|" in line:
-                        pid, ts = line.rsplit("|", 1)
-                        history_data[pid] = ts
-                    elif line:
-                        history_data[line] = str(current_ts)
+                raw = f.read().strip()
+                if not raw:
+                    history = []
+                else:
+                    try:
+                        data = json.loads(raw)
+                        # 支持 dict/map 或 list
+                        if isinstance(data, dict):
+                            for k, v in data.items():
+                                try:
+                                    ts_val = int(v)
+                                except:
+                                    ts_val = 0
+                                history.append({"id": k, "ts": ts_val})
+                        elif isinstance(data, list):
+                            for item in data:
+                                if isinstance(item, dict) and "id" in item:
+                                    try:
+                                        ts_val = int(item.get("ts", 0))
+                                    except:
+                                        ts_val = 0
+                                    history.append({"id": item["id"], "ts": ts_val})
+                    except Exception:
+                        # 兼容旧的行文本格式
+                        for line in raw.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            if "|" in line:
+                                pid, ts = line.rsplit("|", 1)
+                                try:
+                                    ts_val = int(ts)
+                                except:
+                                    ts_val = 0
+                                history.append({"id": pid, "ts": ts_val})
+                            else:
+                                history.append({"id": line, "ts": 0})
         except Exception as e:
             print(f"读取历史记录失败: {e}")
 
-    # 更新或添加新 ID
+    # 合并并刷新时间戳（新出现或重新出现都刷新为 current_ts）
+    existing = {item["id"]: int(item.get("ts", 0)) for item in history}
     changed = False
     for pid in id_list:
-        history_data[pid] = str(current_ts)
-        changed = True
+        if existing.get(pid) != current_ts:
+            existing[pid] = current_ts
+            changed = True
+
+    # 构造排序后的列表（按 ts 降序）
+    new_history = [{"id": k, "ts": v} for k, v in existing.items()]
+    new_history.sort(key=lambda x: x["ts"], reverse=True)
 
     if changed:
         try:
-            # 写入文件，按时间戳降序排序（可选，此处直接覆盖写入即可，导入时排序更灵活）
-            # 为了方便读取，保持格式一致
             with open(file_path, 'w', encoding='utf-8') as f:
-                for pid, ts in history_data.items():
-                    f.write(f"{pid}|{ts}\n")
+                json.dump(new_history, f, ensure_ascii=False, indent=2)
             print(f"[{os.path.basename(file_path)}] 更新了历史 ID 记录。")
         except Exception as e:
             print(f"写入历史记录失败: {e}")
