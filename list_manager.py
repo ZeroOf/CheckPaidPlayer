@@ -5,6 +5,9 @@ import os
 
 class ListManager:
     def __init__(self, root):
+        self.member_listbox = None
+        self.search_entry = None
+        self.group_listbox = None
         self.root = root
         self.root.title("目标名单管理器")
         self.root.geometry("700x550")
@@ -23,7 +26,7 @@ class ListManager:
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
         
         tk.Label(left_frame, text="分组列表").pack()
-        self.group_listbox = tk.Listbox(left_frame)
+        self.group_listbox = tk.Listbox(left_frame, exportselection=False)
         self.group_listbox.pack(fill=tk.BOTH, expand=True)
         self.group_listbox.bind('<<ListboxSelect>>', self.on_group_select)
         
@@ -45,7 +48,7 @@ class ListManager:
         self.search_entry.bind('<KeyRelease>', self.on_search)
 
         tk.Label(right_frame, text="成员列表").pack(pady=(10, 0))
-        self.member_listbox = tk.Listbox(right_frame)
+        self.member_listbox = tk.Listbox(right_frame, exportselection=False)
         self.member_listbox.pack(fill=tk.BOTH, expand=True)
         
         member_btn_frame = tk.Frame(right_frame)
@@ -97,13 +100,13 @@ class ListManager:
             self.data["groups"][new_group] = []
             self.refresh_group_list()
         elif new_group:
-            messagebox.showwarning("错误", "分组已存在")
+            messagebox.showwarning("错误", "分组已存在", parent=self.root)
 
     def delete_group(self):
         selection = self.group_listbox.curselection()
         if not selection: return
         group_name = self.group_listbox.get(selection[0])
-        if messagebox.askyesno("确认", f"确定删除分组 '{group_name}' 及其所有成员吗？"):
+        if messagebox.askyesno("确认", f"确定删除分组 '{group_name}' 及其所有成员吗？", parent=self.root):
             del self.data["groups"][group_name]
             self.refresh_group_list()
 
@@ -114,7 +117,7 @@ class ListManager:
         new_name = self.ask_input("重命名分组", f"将 '{old_name}' 重命名为:", old_name)
         if new_name and new_name != old_name:
             if new_name in self.data["groups"]:
-                messagebox.showwarning("错误", "新分组名称已存在")
+                messagebox.showwarning("错误", "新分组名称已存在", parent=self.root)
             else:
                 self.data["groups"][new_name] = self.data["groups"].pop(old_name)
                 self.refresh_group_list()
@@ -122,7 +125,7 @@ class ListManager:
     def add_member(self):
         selection = self.group_listbox.curselection()
         if not selection: 
-            messagebox.showwarning("提示", "请先选择一个分组")
+            messagebox.showwarning("提示", "请先选择一个分组", parent=self.root)
             return
         group_name = self.group_listbox.get(selection[0])
         new_id = self.ask_input("新增 ID", f"在分组 '{group_name}' 中新增 ID:")
@@ -131,7 +134,7 @@ class ListManager:
                 self.data["groups"][group_name].append(new_id)
                 self.refresh_member_list(group_name)
             else:
-                messagebox.showwarning("提示", "ID 已存在于该分组中")
+                messagebox.showwarning("提示", "ID 已存在于该分组中", parent=self.root)
 
     def delete_member(self):
         g_selection = self.group_listbox.curselection()
@@ -139,13 +142,13 @@ class ListManager:
         if not g_selection or not m_selection: return
         group_name = self.group_listbox.get(g_selection[0])
         member_id = self.member_listbox.get(m_selection[0])
-        if messagebox.askyesno("确认", f"确定从 '{group_name}' 中删除 ID '{member_id}' 吗？"):
+        if messagebox.askyesno("确认", f"确定从 '{group_name}' 中删除 ID '{member_id}' 吗？", parent=self.root):
             if member_id in self.data["groups"][group_name]:
                 self.data["groups"][group_name].remove(member_id)
                 # 立即持久化更改以避免删除看似无效的问题
                 save_player_data(self.data)
                 self.refresh_member_list(group_name)
-                messagebox.showinfo("成功", f"已从 '{group_name}' 删除 ID '{member_id}' 并保存。")
+                messagebox.showinfo("成功", f"已从 '{group_name}' 删除 ID '{member_id}' 并保存。", parent=self.root)
 
     def edit_member(self):
         g_selection = self.group_listbox.curselection()
@@ -172,19 +175,19 @@ class ListManager:
         
         if target_group and target_group != source_group:
             if member_id in self.data["groups"][target_group]:
-                messagebox.showinfo("提示", f"ID '{member_id}' 已在目标分组 '{target_group}' 中")
+                messagebox.showinfo("提示", f"ID '{member_id}' 已在目标分组 '{target_group}' 中", parent=self.root)
             else:
                 self.data["groups"][source_group].remove(member_id)
                 self.data["groups"][target_group].append(member_id)
                 self.refresh_member_list(source_group)
-                messagebox.showinfo("成功", f"已成功移动到 '{target_group}'")
+                messagebox.showinfo("成功", f"已成功移动到 '{target_group}'", parent=self.root)
 
     def import_from_history(self):
         from config import HISTORY_FILE
         history_path = os.path.join(os.path.abspath("."), HISTORY_FILE)
         
         if not os.path.exists(history_path):
-            messagebox.showwarning("错误", "未找到历史记录文件")
+            messagebox.showwarning("错误", "未找到历史记录文件", parent=self.root)
             return
             
         try:
@@ -249,11 +252,11 @@ class ListManager:
             history_list.sort(key=lambda x: x["ts"], reverse=True)
             history_ids = [item["id"] for item in history_list]
         except Exception as e:
-            messagebox.showerror("错误", f"读取历史记录失败: {e}")
+            messagebox.showerror("错误", f"读取历史记录失败: {e}", parent=self.root)
             return
             
         if not history_ids:
-            messagebox.showinfo("提示", "历史记录为空")
+            messagebox.showinfo("提示", "历史记录为空", parent=self.root)
             return
             
         # 弹窗选择 ID 和 分组
@@ -270,7 +273,7 @@ class ListManager:
         scrollbar = tk.Scrollbar(list_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        id_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set)
+        id_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, yscrollcommand=scrollbar.set, exportselection=False)
         for hid in history_ids:
             id_listbox.insert(tk.END, hid)
         id_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -288,10 +291,10 @@ class ListManager:
             target_group = group_combo.get().strip()
             
             if not selection:
-                messagebox.showwarning("警告", "请至少选择一个 ID")
+                messagebox.showwarning("警告", "请至少选择一个 ID", parent=self.root)
                 return
             if not target_group:
-                messagebox.showwarning("警告", "请选择目标分组")
+                messagebox.showwarning("警告", "请选择目标分组", parent=self.root)
                 return
                 
             if target_group not in self.data["groups"]:
@@ -304,7 +307,7 @@ class ListManager:
                     self.data["groups"][target_group].append(pid)
                     added_count += 1
             
-            messagebox.showinfo("成功", f"成功导入 {added_count} 个 ID 到 '{target_group}'")
+            messagebox.showinfo("成功", f"成功导入 {added_count} 个 ID 到 '{target_group}'", parent=self.root)
             self.refresh_group_list() # 刷新列表
             import_win.destroy()
             
@@ -355,7 +358,7 @@ class ListManager:
 
     def save_changes(self):
         save_player_data(self.data)
-        messagebox.showinfo("成功", "更改已保存到 player_list.json")
+        messagebox.showinfo("成功", "更改已保存到 player_list.json", parent=self.root)
         self.root.destroy()
 
 if __name__ == "__main__":

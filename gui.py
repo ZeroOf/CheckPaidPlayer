@@ -1,3 +1,6 @@
+import csv
+import io
+import subprocess
 import time
 import threading
 import tkinter as tk
@@ -202,16 +205,47 @@ class MonitorApp:
         # 更新 OptionMenu 比较麻烦，简单处理是重新设置展示列表
         self.update_keyword_display()
 
+    def is_war3_running(self):
+        """检查 war3 进程是否已启动。"""
+        try:
+            output = subprocess.check_output(["tasklist", "/FO", "CSV", "/NH"], stderr=subprocess.DEVNULL, text=True)
+        except Exception:
+            return False
+
+        for row in csv.reader(io.StringIO(output)):
+            if not row:
+                continue
+            proc_name = row[0].strip().lower()
+            if proc_name in {"war3.exe", "warcraft iii.exe", "war3loader.exe"}:
+                return True
+            if proc_name.endswith("\\war3.exe") or proc_name.endswith("\\warcraft iii.exe"):
+                return True
+        return False
+
+    def wait_for_war3_start(self):
+        while not self.stop_event.is_set():
+            if self.is_war3_running():
+                self.start_time = time.time()
+                self.root.after(0, self.start_monitor_loop)
+                return
+            time.sleep(CHECK_INTERVAL)
+
+    def start_monitor_loop(self):
+        if not self.is_running or self.stop_event.is_set():
+            return
+        self.label_status.config(text="状态: 正在监控...", fg="green")
+        self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
+        self.monitor_thread.start()
+
     def start_monitoring(self):
         if not self.is_running:
             self.is_running = True
-            self.start_time = time.time()
             self.stop_event.clear()
             self.btn_start.config(state=tk.DISABLED)
             self.btn_stop.config(state=tk.NORMAL)
-            self.label_status.config(text="状态: 正在监控...", fg="green")
-            
-            self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
+            self.label_status.config(text="状态: 等待 war3 进程启动...", fg="orange")
+
+            self.monitor_thread = threading.Thread(target=self.wait_for_war3_start, daemon=True)
             self.monitor_thread.start()
 
     def stop_monitoring(self):
