@@ -208,7 +208,9 @@ class MonitorApp:
     def is_war3_running(self):
         """检查 war3 进程是否已启动。"""
         try:
-            output = subprocess.check_output(["tasklist", "/FO", "CSV", "/NH"], stderr=subprocess.DEVNULL, text=True)
+            # Prevent showing a terminal window when invoking tasklist on Windows
+            creation_flags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            output = subprocess.check_output(["tasklist", "/FO", "CSV", "/NH"], stderr=subprocess.DEVNULL, text=True, creationflags=creation_flags)
         except Exception:
             return False
 
