@@ -4,7 +4,7 @@ import json
 # 监测区域：左，上，宽，高
 MONITOR_REGION = {"top": 140, "left": 100, "width": 900, "height": 960}
 CHECK_INTERVAL = 0.5
-TIMEOUT_SECONDS = 300  # 启动后 300s 未检测到目标则停止
+TIMEOUT_SECONDS = 120 #启动后 120s 未检测到目标则停止
 
 # 默认混淆字符映射表
 DEFAULT_CONFUSABLE_MAP = {

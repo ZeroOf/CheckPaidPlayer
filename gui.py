@@ -12,10 +12,86 @@ from PIL import Image
 from mss import mss
 from plyer import notification
 
+import ctypes
+from ctypes import wintypes
+
 from config import MONITOR_REGION, CHECK_INTERVAL, TIMEOUT_SECONDS, HISTORY_FILE, HISTORY_COUNT_TRIGGER
 from utils import save_keywords, get_variants, load_keywords, get_all_match_keywords, record_history_ids
 from list_manager import ListManager
 from ocr_engine import engine
+
+
+def get_war3_window_rect():
+    """Return dict {left, top, width, height} of a visible window whose title contains 'warcraft' or 'war3', or None."""
+    try:
+        import win32gui
+        hwnds = []
+        def _enum(h, extra):
+            hwnds.append(h)
+        win32gui.EnumWindows(_enum, None)
+        for h in hwnds:
+            if win32gui.IsWindowVisible(h):
+                title = win32gui.GetWindowText(h) or ""
+                if "warcraft" in title.lower() or "war3" in title.lower():
+                    l, t, r, b = win32gui.GetWindowRect(h)
+                    return {"left": l, "top": t, "width": r - l, "height": b - t}
+    except Exception:
+        pass
+
+    # ctypes fallback
+    user32 = ctypes.windll.user32
+    EnumWindowsProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    rect_found = []
+    def foreach(hwnd, lParam):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = buf.value or ""
+            if "warcraft" in title.lower() or "war3" in title.lower():
+                rect = wintypes.RECT()
+                user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                rect_found.append((rect.left, rect.top, rect.right, rect.bottom))
+                return False
+        return True
+    user32.EnumWindows(EnumWindowsProc(foreach), 0)
+    if rect_found:
+        l, t, r, b = rect_found[0]
+        return {"left": l, "top": t, "width": r - l, "height": b - t}
+    return None
+
+
+def scale_monitor_region(win_rect, reference_width=3840, reference_height=2160):
+    """Scale MONITOR_REGION (defined for reference resolution) to the given window rectangle.
+
+    win_rect: dict with left, top, width, height
+    Returns dict suitable for mss.grab: {"left", "top", "width", "height"} or None on error
+    """
+    try:
+        ref = MONITOR_REGION
+        win_w = max(1, win_rect['width'])
+        win_h = max(1, win_rect['height'])
+        sx = win_w / float(reference_width)
+        sy = win_h / float(reference_height)
+        left = win_rect['left'] + int(ref['left'] * sx)
+        top = win_rect['top'] + int(ref['top'] * sy)
+        width = int(ref['width'] * sx)
+        height = int(ref['height'] * sy)
+        # clip to window bounds
+        if left < win_rect['left']:
+            left = win_rect['left']
+        if top < win_rect['top']:
+            top = win_rect['top']
+        if left + width > win_rect['left'] + win_w:
+            width = (win_rect['left'] + win_w) - left
+        if top + height > win_rect['top'] + win_h:
+            height = (win_rect['top'] + win_h) - top
+        if width <= 0 or height <= 0:
+            return None
+        return {"left": int(left), "top": int(top), "width": int(width), "height": int(height)}
+    except Exception as e:
+        print(f"scale_monitor_region error: {e}")
+        return None
 
 class MonitorApp:
     def __init__(self, root):
@@ -317,7 +393,17 @@ class MonitorApp:
                     break
 
                 try:
-                    screenshot = sct.grab(MONITOR_REGION)
+                    win_rect = get_war3_window_rect()
+                    if not win_rect:
+                        # War3 窗口未找到，稍后重试
+                        time.sleep(CHECK_INTERVAL)
+                        continue
+                    scaled = scale_monitor_region(win_rect, reference_width=3840, reference_height=2160)
+                    if not scaled:
+                        # 计算失败则重试
+                        time.sleep(CHECK_INTERVAL)
+                        continue
+                    screenshot = sct.grab(scaled)
                     img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
                     img_np = np.array(img)
                     
