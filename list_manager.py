@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
+import winsound
 from utils import load_player_data, save_player_data, set_dpi_awareness
 import os
 
@@ -10,7 +11,8 @@ class ListManager:
         self.group_listbox = None
         self.root = root
         self.root.title("目标名单管理器")
-        self.root.geometry("700x550")
+        self.root.geometry("820x600")
+        self.root.minsize(740, 520)
         
         set_dpi_awareness()
         
@@ -22,48 +24,52 @@ class ListManager:
 
     def setup_ui(self):
         # Left side: Group list
-        left_frame = tk.Frame(self.root, width=200)
-        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+        left_frame = tk.Frame(self.root, width=240)
+        left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 5), pady=10)
         
-        tk.Label(left_frame, text="分组列表").pack()
+        tk.Label(left_frame, text="分组列表", font=("Arial", 9, "bold")).pack(pady=(0, 4))
         self.group_listbox = tk.Listbox(left_frame, exportselection=False)
         self.group_listbox.pack(fill=tk.BOTH, expand=True)
         self.group_listbox.bind('<<ListboxSelect>>', self.on_group_select)
         
         group_btn_frame = tk.Frame(left_frame)
-        group_btn_frame.pack(fill=tk.X, pady=5)
-        tk.Button(group_btn_frame, text="新增", command=self.add_group).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        tk.Button(group_btn_frame, text="删除", command=self.delete_group).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        tk.Button(group_btn_frame, text="重命名", command=self.rename_group).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        group_btn_frame.pack(fill=tk.X, pady=6)
+        tk.Button(group_btn_frame, text="新增", command=self.add_group, width=6).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        tk.Button(group_btn_frame, text="删除", command=self.delete_group, width=6).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        tk.Button(group_btn_frame, text="重命名", command=self.rename_group, width=6).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
-        # Right side: Member list
-        right_frame = tk.Frame(self.root)
-        right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Right side: Action buttons (竖排排列置于右下角)
+        right_btn_frame = tk.Frame(self.root, padx=5)
+        right_btn_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 10), pady=10)
+
+        right_bottom_box = tk.Frame(right_btn_frame)
+        right_bottom_box.pack(side=tk.BOTTOM, fill=tk.X)
+
+        tk.Button(right_bottom_box, text="从历史导入", command=self.import_from_history, bg="#e1e1e1", font=("Arial", 9), width=12, pady=3).pack(pady=4, fill=tk.X)
+        tk.Button(right_bottom_box, text="混淆字符管理", command=self.open_confusable_manager, bg="#e1e1e1", font=("Arial", 9), width=12, pady=3).pack(pady=4, fill=tk.X)
+        tk.Button(right_bottom_box, text="保存更改", command=self.save_changes, bg="green", fg="white", font=("Arial", 9, "bold"), width=12, pady=3).pack(pady=4, fill=tk.X)
+
+        # Center: Member list
+        center_frame = tk.Frame(self.root)
+        center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=10)
         
-        search_frame = tk.Frame(right_frame)
+        search_frame = tk.Frame(center_frame)
         search_frame.pack(fill=tk.X)
         tk.Label(search_frame, text="搜索:").pack(side=tk.LEFT)
         self.search_entry = tk.Entry(search_frame)
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.search_entry.bind('<KeyRelease>', self.on_search)
 
-        tk.Label(right_frame, text="成员列表").pack(pady=(10, 0))
-        self.member_listbox = tk.Listbox(right_frame, exportselection=False)
+        tk.Label(center_frame, text="成员列表", font=("Arial", 9, "bold")).pack(pady=(8, 4))
+        self.member_listbox = tk.Listbox(center_frame, exportselection=False)
         self.member_listbox.pack(fill=tk.BOTH, expand=True)
         
-        member_btn_frame = tk.Frame(right_frame)
-        member_btn_frame.pack(fill=tk.X, pady=5)
-        tk.Button(member_btn_frame, text="新增 ID", command=self.add_member).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        tk.Button(member_btn_frame, text="删除 ID", command=self.delete_member).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        tk.Button(member_btn_frame, text="编辑 ID", command=self.edit_member).pack(side=tk.LEFT, expand=True, fill=tk.X)
-        tk.Button(member_btn_frame, text="移动", command=self.move_member).pack(side=tk.LEFT, expand=True, fill=tk.X)
-
-        # 底部按钮区
-        bottom_frame = tk.Frame(self.root)
-        bottom_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
-
-        tk.Button(bottom_frame, text="从历史导入", command=self.import_from_history, bg="#e1e1e1").pack(side=tk.LEFT, padx=5)
-        tk.Button(bottom_frame, text="保存更改", command=self.save_changes, bg="green", fg="white").pack(side=tk.RIGHT, expand=True, fill=tk.X, padx=5)
+        member_btn_frame = tk.Frame(center_frame)
+        member_btn_frame.pack(fill=tk.X, pady=6)
+        tk.Button(member_btn_frame, text="新增 ID", command=self.add_member, width=7).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        tk.Button(member_btn_frame, text="删除 ID", command=self.delete_member, width=7).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        tk.Button(member_btn_frame, text="编辑 ID", command=self.edit_member, width=7).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
+        tk.Button(member_btn_frame, text="移动", command=self.move_member, width=7).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=2)
 
     def refresh_group_list(self):
         self.group_listbox.delete(0, tk.END)
@@ -262,7 +268,10 @@ class ListManager:
         # 弹窗选择 ID 和 分组
         import_win = tk.Toplevel(self.root)
         import_win.title("从历史导入")
-        import_win.geometry("400x500")
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
         import_win.transient(self.root)
         import_win.grab_set()
         
@@ -312,11 +321,22 @@ class ListManager:
             import_win.destroy()
             
         tk.Button(import_win, text="确定导入", command=do_import, bg="green", fg="white", height=2).pack(fill=tk.X, padx=10, pady=10)
+        # 调整窗口大小以适应内容并居中显示
+        import_win.update_idletasks()
+        w = max(440, import_win.winfo_width())
+        h = max(500, import_win.winfo_height())
+        x = max(0, self.root.winfo_x() + (self.root.winfo_width() // 2) - (w // 2))
+        y = max(0, self.root.winfo_y() + (self.root.winfo_height() // 2) - (h // 2))
+        import_win.geometry(f"{w}x{h}+{x}+{y}")
+        import_win.minsize(400, 420)
 
     def ask_selection(self, title, prompt, options):
         dialog = tk.Toplevel(self.root)
         dialog.title(title)
-        dialog.geometry("300x150")
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -330,29 +350,49 @@ class ListManager:
             res[0] = combo.get()
             dialog.destroy()
             
-        tk.Button(dialog, text="确定", command=on_ok).pack(pady=20)
+        tk.Button(dialog, text="确定", command=on_ok, width=10, bg="#4CAF50", fg="white", font=("Arial", 9, "bold")).pack(pady=15)
+        # 调整对话框大小并居中
+        dialog.update_idletasks()
+        w = max(340, dialog.winfo_width())
+        h = max(160, dialog.winfo_height())
+        x = max(0, self.root.winfo_x() + (self.root.winfo_width() // 2) - (w // 2))
+        y = max(0, self.root.winfo_y() + (self.root.winfo_height() // 2) - (h // 2))
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+        dialog.minsize(320, 150)
         self.root.wait_window(dialog)
         return res[0]
 
     def ask_input(self, title, prompt, initialvalue=""):
         dialog = tk.Toplevel(self.root)
         dialog.title(title)
-        dialog.geometry("300x120")
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
         dialog.transient(self.root)
         dialog.grab_set()
         
-        tk.Label(dialog, text=prompt).pack(pady=5)
-        entry = tk.Entry(dialog)
+        tk.Label(dialog, text=prompt, font=("Arial", 9)).pack(pady=(12, 6), padx=15)
+        entry = tk.Entry(dialog, font=("Arial", 10))
         entry.insert(0, initialvalue)
         entry.pack(fill=tk.X, padx=20)
         entry.focus_set()
+        entry.bind("<Return>", lambda e: on_ok())
         
         res = [None]
         def on_ok():
             res[0] = entry.get().strip()
             dialog.destroy()
         
-        tk.Button(dialog, text="确定", command=on_ok).pack(pady=10)
+        tk.Button(dialog, text="确定", command=on_ok, width=10, bg="#4CAF50", fg="white", font=("Arial", 9, "bold")).pack(pady=15)
+        # 调整对话框大小并居中
+        dialog.update_idletasks()
+        w = max(340, dialog.winfo_width())
+        h = max(160, dialog.winfo_height())
+        x = max(0, self.root.winfo_x() + (self.root.winfo_width() // 2) - (w // 2))
+        y = max(0, self.root.winfo_y() + (self.root.winfo_height() // 2) - (h // 2))
+        dialog.geometry(f"{w}x{h}+{x}+{y}")
+        dialog.minsize(320, 150)
         self.root.wait_window(dialog)
         return res[0]
 
@@ -360,6 +400,11 @@ class ListManager:
         save_player_data(self.data)
         messagebox.showinfo("成功", "更改已保存到 player_list.json", parent=self.root)
         self.root.destroy()
+
+    def open_confusable_manager(self):
+        confusable_win = tk.Toplevel(self.root)
+        from confusable_manager import ConfusableManager
+        ConfusableManager(confusable_win)
 
 if __name__ == "__main__":
     root = tk.Tk()

@@ -114,8 +114,8 @@ class MonitorApp:
         self.display_groups = ["全部"] + self.groups
         
         # 初始窗口大小
-        base_width = 450
-        base_height = 600
+        base_width = 480
+        base_height = 620
         
         self.is_running = False
         self.monitor_thread = None
@@ -127,11 +127,12 @@ class MonitorApp:
         screen_height = self.root.winfo_screenheight()
         
         # 中部偏右：x 保持靠近右边缘，y 居中
-        x = screen_width - base_width - 10 
-        y = (screen_height - base_height) // 2 
+        x = max(0, screen_width - base_width - 10)
+        y = max(0, (screen_height - base_height) // 2)
         
         self.root.geometry(f"{base_width}x{base_height}+{x}+{y}")
-        self.root.resizable(False, False) 
+        self.root.minsize(460, 580)
+        self.root.resizable(True, True)
         
         # UI 元素
         self.label_status = tk.Label(root, text="状态: 未运行", fg="red", font=("Arial", 12), width=20)
@@ -145,22 +146,29 @@ class MonitorApp:
 
         # 新增 ID 区域
         frame_add = tk.Frame(root)
-        frame_add.pack(pady=10)
+        frame_add.pack(pady=5)
         
-        tk.Label(frame_add, text="分组:").grid(row=0, column=0, padx=2)
+        tk.Label(frame_add, text="分组:").grid(row=0, column=0, padx=2, pady=2)
         self.combo_group = ttk.Combobox(frame_add, values=self.groups, width=8)
         self.combo_group.set("默认")
-        self.combo_group.grid(row=0, column=1, padx=2)
+        self.combo_group.grid(row=0, column=1, padx=2, pady=2)
         
-        tk.Label(frame_add, text="ID:").grid(row=0, column=2, padx=2)
-        self.entry_new_id = tk.Entry(frame_add, width=12)
-        self.entry_new_id.grid(row=0, column=3, padx=2)
+        tk.Label(frame_add, text="ID:").grid(row=0, column=2, padx=2, pady=2)
+        self.entry_new_id = tk.Entry(frame_add, width=14)
+        self.entry_new_id.grid(row=0, column=3, padx=2, pady=2)
         
-        self.btn_add = tk.Button(frame_add, text="添加", command=self.add_keyword)
-        self.btn_add.grid(row=0, column=4, padx=5)
+        self.btn_add = tk.Button(frame_add, text="添加", command=self.add_keyword, width=6)
+        self.btn_add.grid(row=0, column=4, padx=5, pady=2)
 
-        self.btn_manage = tk.Button(frame_add, text="管理", command=self.open_manager, bg="#f0f0f0")
-        self.btn_manage.grid(row=0, column=5, padx=5)
+        # 管理工具按钮区域
+        frame_tools = tk.Frame(root)
+        frame_tools.pack(pady=3)
+
+        self.btn_manage = tk.Button(frame_tools, text="名单管理", command=self.open_manager, width=14, bg="#f0f0f0")
+        self.btn_manage.pack(side=tk.LEFT, padx=6)
+
+        self.btn_confusable = tk.Button(frame_tools, text="混淆字符管理", command=self.open_confusable_manager, width=14, bg="#f0f0f0")
+        self.btn_confusable.pack(side=tk.LEFT, padx=6)
 
         # 展示列表区域
         frame_list_header = tk.Frame(root)
@@ -262,6 +270,15 @@ class MonitorApp:
         self.root.wait_window(manager_root)
         self.reload_data()
 
+    def open_confusable_manager(self):
+        """ 打开独立的混淆字符表管理器窗口 """
+        manager_root = tk.Toplevel(self.root)
+        from confusable_manager import ConfusableManager
+        ConfusableManager(manager_root)
+        # 等待混淆管理器关闭后刷新界面和识别变体
+        self.root.wait_window(manager_root)
+        self.reload_data()
+
     def reload_data(self):
         """ 重新从文件加载数据并刷新界面 """
         self.grouped_keywords = load_keywords()
@@ -347,17 +364,32 @@ class MonitorApp:
         # 设置置顶
         top.attributes("-topmost", True)
         top.lift()
-        
-        # 居中显示在主窗口上方
-        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 150
-        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 60
-        top.geometry(f"300x120+{x}+{y}")
+        # 声音提醒
+        try:
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+
+        # 根据主窗口限制设置文本最大折行宽度，避免过宽或过窄
+        try:
+            max_wrap = max(200, min(600, self.root.winfo_width() - 100))
+        except Exception:
+            max_wrap = 400
 
         tk.Label(top, text="玩家检测提醒", font=("Arial", 12, "bold"), pady=10).pack()
-        tk.Label(top, text=msg, wraplength=250, pady=5).pack()
+        tk.Label(top, text=msg, wraplength=max_wrap, pady=5).pack()
         
         btn = tk.Button(top, text="确定 (10s)", command=top.destroy, width=10)
         btn.pack(pady=5)
+
+        # 调整窗口大小以适应内容并居中显示
+        top.update_idletasks()
+        w = max(380, top.winfo_width() + 40)
+        h = max(200, top.winfo_height() + 20)
+        x = max(0, self.root.winfo_x() + (self.root.winfo_width() // 2) - (w // 2))
+        y = max(0, self.root.winfo_y() + (self.root.winfo_height() // 2) - (h // 2))
+        top.geometry(f"{w}x{h}+{x}+{y}")
+        top.minsize(360, 180)
 
         # 10秒后自动关闭
         def auto_close(remaining):
@@ -367,19 +399,17 @@ class MonitorApp:
                 else:
                     btn.config(text=f"确定 ({remaining}s)")
                     top.after(1000, lambda: auto_close(remaining - 1))
-        
+
         top.after(1000, lambda: auto_close(9))
 
         try:
-            # 使用系统通知
+            # 使用系统通知（不依赖于其成功与否）
             notification.notify(
                 title="玩家检测提醒",
                 message=msg,
                 app_name="Player Monitor",
                 timeout=10
             )
-            # 仍然保留声音提醒
-            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
         except Exception as e:
             print(f"发送系统通知失败: {e}")
 

@@ -25,13 +25,14 @@ def get_resource_path(relative_path):
 
 def get_variants(text):
     """ 生成可能的识别错误变体 """
+    import re
     variants = {text}
     
     # 1. 常见的大小写变体
     variants.add(text.lower())
     variants.add(text.upper())
 
-    # 2. 基于映射的替换 (处理英文和数字)
+    # 2. 基于映射的替换 (处理英文和数字以及单字替换)
     chars = list(text)
     for i, char in enumerate(chars):
         if char in CONFUSABLE_MAP:
@@ -47,7 +48,13 @@ def get_variants(text):
                 new_variant[i] = replacement
                 variants.add("".join(new_variant))
 
-    # 3. 针对特定词汇的整体替换 (基于映射中为空字符串的项)
+    # 3. 处理多字符混淆映射
+    for conf_key, replacements in CONFUSABLE_MAP.items():
+        if len(conf_key) > 1 and conf_key in text:
+            for replacement in replacements:
+                variants.add(text.replace(conf_key, replacement))
+
+    # 4. 针对特定词汇的整体替换 (基于映射中为空字符串的项)
     current_text = text
     for char, replacements in CONFUSABLE_MAP.items():
         if '' in replacements:
@@ -58,6 +65,110 @@ def get_variants(text):
         variants.add(stripped)
 
     return list(variants)
+
+def extract_confusable_diffs(s1, s2):
+    """
+    通过两个用户名对比，自动提取可能被混淆的字符或片段。
+    返回列表，每个元素为元组: (src, tgt, type)
+    type 取值:
+      - 'group': 相互混淆组（如 '8' 与 'B', '声' 与 '生'）
+      - 'mapping': 单向/多字符映射（如 'w' 与 'vv'）
+      - 'removal': 消除/忽略字符（如 '灬' 与 ''）
+    """
+    if not s1 or not s2 or s1 == s2:
+        return []
+
+    n, m = len(s1), len(s2)
+    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        dp[i][0] = i * 1.01
+    for j in range(m + 1):
+        dp[0][j] = j * 1.01
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if s1[i - 1] == s2[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                dp[i][j] = min(
+                    dp[i - 1][j - 1] + 1.0,  # 替换
+                    dp[i - 1][j] + 1.01,     # 删除
+                    dp[i][j - 1] + 1.01      # 插入
+                )
+
+    # 回溯
+    i, j = n, m
+    ops = []
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and s1[i - 1] == s2[j - 1] and abs(dp[i][j] - dp[i - 1][j - 1]) < 1e-5:
+            ops.append(('equal', s1[i - 1], s2[j - 1]))
+            i -= 1
+            j -= 1
+        elif i > 0 and j > 0 and abs(dp[i][j] - (dp[i - 1][j - 1] + 1.0)) < 1e-5:
+            ops.append(('replace', s1[i - 1], s2[j - 1]))
+            i -= 1
+            j -= 1
+        elif i > 0 and abs(dp[i][j] - (dp[i - 1][j] + 1.01)) < 1e-5:
+            ops.append(('delete', s1[i - 1], ''))
+            i -= 1
+        elif j > 0:
+            ops.append(('insert', '', s2[j - 1]))
+            j -= 1
+        else:
+            break
+
+    ops.reverse()
+
+    # 合并相邻差异块
+    merged = []
+    k = 0
+    while k < len(ops):
+        tag, c1, c2 = ops[k]
+        if tag == 'equal':
+            k += 1
+            continue
+
+        sub1 = [c1] if c1 else []
+        sub2 = [c2] if c2 else []
+        next_k = k + 1
+        while next_k < len(ops) and ops[next_k][0] != 'equal':
+            if ops[next_k][1]:
+                sub1.append(ops[next_k][1])
+            if ops[next_k][2]:
+                sub2.append(ops[next_k][2])
+            next_k += 1
+
+        str1 = ''.join(sub1)
+        str2 = ''.join(sub2)
+
+        if str1 and not str2:
+            for ch in str1:
+                merged.append((ch, '', 'removal'))
+        elif not str1 and str2:
+            for ch in str2:
+                merged.append((ch, '', 'removal'))
+        elif len(str1) == len(str2):
+            for ch1, ch2 in zip(str1, str2):
+                if ch1 != ch2:
+                    merged.append((ch1, ch2, 'group'))
+        elif len(str1) == 1 or len(str2) == 1:
+            if len(str1) == 1:
+                merged.append((str1, str2, 'mapping'))
+            else:
+                merged.append((str2, str1, 'mapping'))
+        else:
+            merged.append((str1, str2, 'mapping'))
+
+        k = next_k
+
+    seen = set()
+    result = []
+    for item in merged:
+        key = (item[0], item[1], item[2])
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
 
 import json
 
