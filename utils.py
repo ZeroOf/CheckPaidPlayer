@@ -17,6 +17,89 @@ def set_dpi_awareness():
             except Exception:
                 pass
 
+def activate_existing_window(window_title="Warcraft III 玩家监测"):
+    """ 查找已有窗口并将其激活、置前、还原最小化 """
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    found_hwnd = []
+
+    def enum_windows_callback(hwnd, lparam):
+        if user32.IsWindow(hwnd) and user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if window_title in buf.value:
+                    found_hwnd.append(hwnd)
+                    return False
+        return True
+
+    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    user32.EnumWindows(EnumWindowsProc(enum_windows_callback), 0)
+
+    hwnd = found_hwnd[0] if found_hwnd else None
+    if not hwnd:
+        hwnd = user32.FindWindowW(None, window_title)
+
+    if hwnd:
+        # 尝试还原并置顶激活窗口
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        else:
+            user32.ShowWindow(hwnd, SW_SHOW)
+
+        # 解决 Windows 下 SetForegroundWindow 权限限制问题
+        cur_tid = kernel32.GetCurrentThreadId()
+        fore_hwnd = user32.GetForegroundWindow()
+        fore_tid = user32.GetWindowThreadProcessId(fore_hwnd, None)
+        target_tid = user32.GetWindowThreadProcessId(hwnd, None)
+
+        attached = False
+        if cur_tid != fore_tid and fore_tid != 0:
+            user32.AttachThreadInput(cur_tid, fore_tid, True)
+            attached = True
+        if target_tid != cur_tid and target_tid != 0:
+            user32.AttachThreadInput(cur_tid, target_tid, True)
+
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+
+        if hasattr(user32, 'SwitchToThisWindow'):
+            user32.SwitchToThisWindow(hwnd, True)
+
+        if attached:
+            user32.AttachThreadInput(cur_tid, fore_tid, False)
+        if target_tid != cur_tid and target_tid != 0:
+            user32.AttachThreadInput(cur_tid, target_tid, False)
+        return True
+    return False
+
+class SingleInstance:
+    """ 使用 Windows 命名互斥体保证程序单例运行 """
+    def __init__(self, mutex_name=r"Local\PlayerMonitor_SingleInstance_Mutex_v1"):
+        self.mutex_name = mutex_name
+        self.mutex = None
+        self.already_running = False
+
+    def check(self):
+        kernel32 = ctypes.windll.kernel32
+        ERROR_ALREADY_EXISTS = 183
+        self.mutex = kernel32.CreateMutexW(None, False, self.mutex_name)
+        last_error = kernel32.GetLastError()
+        if last_error == ERROR_ALREADY_EXISTS:
+            self.already_running = True
+            return False
+        return True
+
+    def close(self):
+        if self.mutex:
+            ctypes.windll.kernel32.CloseHandle(self.mutex)
+            self.mutex = None
+
 def get_resource_path(relative_path):
     """ 获取资源的绝对路径，适配打包后的路径 """
     if hasattr(sys, '_MEIPASS'):
